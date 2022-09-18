@@ -2,23 +2,25 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/dustin/go-humanize"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
 
-const (
-	domain       = "https://go.dev"
+var (
 	downloadPage = "https://go.dev/dl"
-	installPath  = "/usr/local/go"
+	installPath  = "/usr/local"
 	downloadPath = "/Downloads/golang.tar.gz"
+	domain       = regexp.MustCompile(`^\w+://[\w.-]+`)
 )
 
 func request(url string) (io.ReadCloser, error) {
@@ -36,7 +38,12 @@ func request(url string) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
-func getDownloadURL(r io.ReadCloser) (string, error) {
+func getDownloadURL() (string, error) {
+	r, err := request(downloadPage)
+	if err != nil {
+		return "", err
+	}
+
 	defer r.Close()
 	doc, err := goquery.NewDocumentFromReader(r)
 	if err != nil {
@@ -50,49 +57,39 @@ func getDownloadURL(r io.ReadCloser) (string, error) {
 	if !ok {
 		return "", errors.New("download link not found")
 	}
-	return "https://go.dev" + href, nil
+	return domain.FindString(downloadPage) + href, nil
 }
 
-func saveFile(file io.ReadCloser) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	out, err := os.Create(home + downloadPath)
+func saveFile(file io.ReadCloser, path string) error {
+	out, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	defer file.Close()
 	counter := &WriteCounter{}
-	if _, err = io.Copy(out, io.TeeReader(file, counter)); err != nil {
-		return err
-	}
-	fmt.Println("\nDone")
-	return nil
+	_, err = io.Copy(out, io.TeeReader(file, counter))
+	return err
 }
 
-func removeFile() error {
-	home, err := os.UserHomeDir()
+func downloadGo(url string) error {
+	fmt.Println("Download file: ", url)
+	file, err := request(url)
 	if err != nil {
 		return err
 	}
-	return os.Remove(home + downloadPath)
+	defer file.Close()
+	defer fmt.Println("")
+	return saveFile(file, downloadPath)
 }
 
-func install() error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	cmd := `sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf ` + home + downloadPath
-	out, err := exec.Command("bash", "-c", cmd).Output()
-	fmt.Println(string(out))
-	if err != nil {
-		return err
-	}
-	return nil
+func install(destPath, sourcePath string) error {
+	cmdString := spew.Sprintf("sudo rm -rf %s/go && sudo tar -C %s -xzf %s", destPath, destPath, sourcePath)
+	cmd := exec.Command("bash", "-c", cmdString)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
 
 type WriteCounter struct {
@@ -117,37 +114,54 @@ func (wc WriteCounter) PrintProgress() {
 }
 
 func main() {
-	logrus.Info("Get download URL")
-	resp, err := request(downloadPage)
-	if err != nil {
-		logrus.Error(err)
+	version := flag.Bool("v", false, "get tool version")
+	flag.StringVar(&installPath, "i", installPath, "install path")
+	flag.StringVar(&downloadPage, "d", downloadPage, "url for download page")
+	flag.Parse()
+
+	if *version {
+		fmt.Println("go-updater-x v0.1")
 		return
 	}
 
-	dl, err := getDownloadURL(resp)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		logrus.Error(err)
+		fmt.Println(err)
 		return
 	}
-	logrus.Info("Download file: ", dl)
-	file, err := request(dl)
+
+	downloadPath = home + downloadPath
+
+	// Prepare to download
+	fmt.Println("Get download URL")
+	dl, err := getDownloadURL()
 	if err != nil {
-		logrus.Error(err)
+		fmt.Println(err)
 		return
 	}
-	defer file.Close()
-	if err = saveFile(file); err != nil {
-		logrus.Error(err)
+
+	// Download
+	if err = downloadGo(dl); err != nil {
+		fmt.Println(err)
 		return
 	}
-	defer removeFile()
-	logrus.Info("Install...")
-	if err = install(); err != nil {
-		logrus.Error(err)
+
+	fmt.Println("Install to", installPath)
+	if err = install(installPath, downloadPath); err != nil {
+		fmt.Println(err)
+		return
 	}
+
+	fmt.Println("Remove temp files")
+	if err := os.Remove(downloadPath); err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println("Update complete")
 	out, err := exec.Command("bash", "-c", "go version").Output()
 	fmt.Println(string(out))
 	if err != nil {
-		logrus.Error(err)
+		fmt.Println(err)
 	}
 }
