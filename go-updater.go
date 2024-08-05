@@ -21,7 +21,7 @@ import (
 var (
 	downloadPage = "https://go.dev/dl"
 	installPath  = "/usr/local"
-	downloadPath = "/Downloads/golang.tar.gz"
+	downloadPath = "~/Downloads/golang.tar.gz"
 	domain       = regexp.MustCompile(`^\w+://[\w.-]+`)
 	rgoversion   = regexp.MustCompile(`go[0-9]+[0-9\.]+[0-9]+`)
 )
@@ -185,14 +185,6 @@ func main() {
 		}
 		fmt.Println("Will be installed to", installPath)
 	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	downloadPath = home + downloadPath
 
 	// Prepare to download
 	fmt.Println("Get download URL")
