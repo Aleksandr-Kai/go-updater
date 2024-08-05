@@ -120,7 +120,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("go-updater-x v0.1")
+		fmt.Println("go-updater v0.1")
 		return
 	}
 
