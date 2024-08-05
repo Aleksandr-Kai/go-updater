@@ -1,12 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/dustin/go-humanize"
 	"io"
 	"net/http"
 	"os"
@@ -14,6 +12,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/davecgh/go-spew/spew"
+	"github.com/dustin/go-humanize"
 )
 
 var (
@@ -21,6 +23,7 @@ var (
 	installPath  = "/usr/local"
 	downloadPath = "/Downloads/golang.tar.gz"
 	domain       = regexp.MustCompile(`^\w+://[\w.-]+`)
+	rgoversion   = regexp.MustCompile(`go[0-9]+[0-9\.]+[0-9]+`)
 )
 
 func request(url string) (io.ReadCloser, error) {
@@ -72,7 +75,28 @@ func saveFile(file io.ReadCloser, path string) error {
 	return err
 }
 
+func AskUserYN(message string, defYes bool) string {
+	reader := bufio.NewReader(os.Stdin)
+	answer := "no answer"
+	for answer != "y" && answer != "Y" && answer != "n" && answer != "N" && answer != "" {
+		if defYes {
+			fmt.Printf("%s (Y/n): ", message)
+		} else {
+			fmt.Printf("%s (y/N): ", message)
+		}
+		answer, _ = reader.ReadString('\n')
+		answer = strings.Trim(answer, "\n")
+	}
+
+	return strings.ToLower(answer)
+}
+
 func downloadGo(url string) error {
+	if _, err := os.Stat(downloadPath); !errors.Is(err, os.ErrNotExist) {
+		if AskUserYN("File exists. Replace it?", true) == "n" {
+			return nil
+		}
+	}
 	fmt.Println("Download file: ", url)
 	file, err := request(url)
 	if err != nil {
@@ -113,8 +137,36 @@ func (wc WriteCounter) PrintProgress() {
 	fmt.Printf("\rDownloading... %s complete", humanize.Bytes(wc.Total))
 }
 
+func getGoVersionInstalled() (string, error) {
+	out, err := exec.Command("bash", "-c", "go version").Output()
+	ver := rgoversion.Find(out)
+	fmt.Printf("Installed version: %s\n", string(ver))
+	return string(ver), err
+}
+
+func getGoVersionActual(url string) string {
+	ver := rgoversion.FindString(url)
+	fmt.Printf("Current version: %s\n", ver)
+	return string(ver)
+}
+
+func getInstallPath() (string, error) {
+	out, err := exec.Command("bash", "-c", "which go").Output()
+	if err != nil {
+		return "", fmt.Errorf("getInstallPath: unable to get path to 'go'")
+	}
+
+	r := regexp.MustCompile("/go.+")
+	indexes := r.FindIndex(out)
+	if len(indexes) == 0 {
+		return "", fmt.Errorf("getInstallPath: invalid path")
+	}
+	return string(out[0:indexes[0]]), nil
+}
+
 func main() {
 	version := flag.Bool("v", false, "get tool version")
+	autoPath := flag.Bool("a", false, "try get install path")
 	flag.StringVar(&installPath, "i", installPath, "install path")
 	flag.StringVar(&downloadPage, "d", downloadPage, "url for download page")
 	flag.Parse()
@@ -122,6 +174,16 @@ func main() {
 	if *version {
 		fmt.Println("go-updater v0.1")
 		return
+	}
+
+	if *autoPath {
+		var err error
+		installPath, err = getInstallPath()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println("Will be installed to", installPath)
 	}
 
 	home, err := os.UserHomeDir()
@@ -140,6 +202,18 @@ func main() {
 		return
 	}
 
+	verInstalled, err := getGoVersionInstalled()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	verDownload := getGoVersionActual(dl)
+
+	if strings.Compare(verInstalled, verDownload) == 0 {
+		fmt.Println("The current version is installed")
+		return
+	}
+
 	// Download
 	if err = downloadGo(dl); err != nil {
 		fmt.Println(err)
@@ -149,7 +223,6 @@ func main() {
 	fmt.Println("Install to", installPath)
 	if err = install(installPath, downloadPath); err != nil {
 		fmt.Println(err)
-		return
 	}
 
 	fmt.Println("Remove temp files")
